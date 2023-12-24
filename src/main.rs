@@ -1,6 +1,7 @@
 use anyhow::Result;
 use std::cmp::min;
 use std::collections::HashMap;
+use std::fmt::Display;
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::net::{TcpListener, TcpStream};
 
@@ -16,8 +17,28 @@ const TEXT_PLAIN: &str = "text/plain";
 struct Request {
     method: Method,
     path: String,
+    version: String,
     headers: HashMap<String, String>,
     body: String,
+}
+
+impl Display for Request {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut headers = String::new();
+        for (key, value) in &self.headers {
+            headers.push_str(&format!("{}: {}\r\n", key, value));
+        }
+
+        write!(
+            f,
+            "{} {} {}\r\n{}\r\n{}",
+            self.method.as_str(),
+            self.path,
+            self.version,
+            headers,
+            self.body
+        )
+    }
 }
 
 struct Response {
@@ -54,12 +75,34 @@ enum Method {
     Delete,
 }
 
+impl Method {
+    fn as_str(&self) -> &str {
+        match self {
+            Method::Get => "GET",
+            Method::Post => "POST",
+            Method::Put => "PUT",
+            Method::Delete => "DELETE",
+        }
+    }
+}
+
 #[derive(Debug, PartialEq)]
 enum Status {
     Http200,
     Http400,
     Http404,
     Http405,
+}
+
+impl Status {
+    fn as_str(&self) -> &str {
+        match self {
+            Status::Http200 => "200 OK",
+            Status::Http400 => "400 Bad Request",
+            Status::Http404 => "404 Not Found",
+            Status::Http405 => "405 Method Not Allowed",
+        }
+    }
 }
 
 fn parse_to_request(stream: &mut BufReader<&TcpStream>) -> Result<Request> {
@@ -83,8 +126,8 @@ fn parse_to_request(stream: &mut BufReader<&TcpStream>) -> Result<Request> {
 
     let path = parts[1].to_owned();
 
-    match parts[2] {
-        "HTTP/1.1" => {}
+    let version = match parts[2] {
+        s if s == "HTTP/1.1" => s.to_owned(),
         _ => return Err(anyhow::anyhow!("invalid version")),
     };
 
@@ -128,6 +171,7 @@ fn parse_to_request(stream: &mut BufReader<&TcpStream>) -> Result<Request> {
     Ok(Request {
         method,
         path,
+        version,
         headers,
         body,
     })
@@ -169,14 +213,7 @@ fn handle_request(request: Request) -> Response {
 }
 
 fn write_response(response: Response, stream: &mut BufWriter<&TcpStream>) -> Result<()> {
-    let status = match response.status {
-        Status::Http200 => "200 OK",
-        Status::Http400 => "400 Bad Request",
-        Status::Http404 => "404 Not Found",
-        Status::Http405 => "405 Method Not Allowed",
-    };
-
-    stream.write_all(format!("HTTP/1.1 {}\r\n", status).as_bytes())?;
+    stream.write_all(format!("HTTP/1.1 {}\r\n", response.status.as_str()).as_bytes())?;
 
     for (key, value) in response.headers {
         stream.write_all(format!("{}: {}\r\n", key, value).as_bytes())?;
@@ -192,10 +229,11 @@ fn handle_connection(stream: TcpStream) {
     let mut reader = BufReader::new(&stream);
     let request = parse_to_request(&mut reader);
 
-    println!("{:?}", request);
-
     let response = match request {
-        Ok(request) => handle_request(request),
+        Ok(request) => {
+            println!("{}", request);
+            handle_request(request)
+        }
         Err(_) => Response::new(Status::Http400),
     };
     let mut writer = BufWriter::new(&stream);
