@@ -10,7 +10,7 @@ struct Request {
     method: Method,
     path: String,
     headers: HashMap<String, String>,
-    body: Option<String>,
+    body: String,
 }
 
 struct Response {
@@ -40,7 +40,7 @@ impl Response {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 enum Method {
     Get,
     Post,
@@ -52,6 +52,7 @@ enum Status {
     Http200,
     Http400,
     Http404,
+    Http405,
 }
 
 fn parse_to_request(stream: &mut BufReader<&TcpStream>) -> Result<Request> {
@@ -105,17 +106,16 @@ fn parse_to_request(stream: &mut BufReader<&TcpStream>) -> Result<Request> {
         return Err(anyhow::anyhow!("content too long"));
     }
 
+    // fix dead lock when no body but content-length is set
     let body = if content_length > 0 {
         let mut buf = [0u8; 1024];
         let n = stream.read(&mut buf)?;
-        Some(
-            buf[..min(n, content_length)]
-                .iter()
-                .map(|&c| c as char)
-                .collect(),
-        )
+        buf[..min(n, content_length)]
+            .iter()
+            .map(|&c| c as char)
+            .collect()
     } else {
-        None
+        String::new()
     };
 
     Ok(Request {
@@ -126,9 +126,24 @@ fn parse_to_request(stream: &mut BufReader<&TcpStream>) -> Result<Request> {
     })
 }
 
+fn root_handler(request: Request) -> Response {
+    if request.method != Method::Get {
+        return Response::new(Status::Http405);
+    }
+    Response::new(Status::Http200).with_body("Hello World")
+}
+
+fn echo_handler(request: Request) -> Response {
+    if request.method != Method::Post {
+        return Response::new(Status::Http405);
+    }
+    Response::new(Status::Http200).with_body(request.body.as_str())
+}
+
 fn handle_request(request: Request) -> Response {
     match request.path.as_str() {
-        "/" => Response::new(Status::Http200).with_body("Hello World\n"),
+        "/" => root_handler(request),
+        "/echo" => echo_handler(request),
         _ => Response::new(Status::Http404),
     }
 }
@@ -138,6 +153,7 @@ fn write_response(response: Response, stream: &mut BufWriter<&TcpStream>) -> Res
         Status::Http200 => "200 OK",
         Status::Http400 => "400 Bad Request",
         Status::Http404 => "404 Not Found",
+        Status::Http405 => "405 Method Not Allowed",
     };
 
     stream.write_all(format!("HTTP/1.1 {}\r\n", status).as_bytes())?;
