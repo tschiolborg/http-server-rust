@@ -4,6 +4,13 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::net::{TcpListener, TcpStream};
 
+// header keys
+const CONTENT_LENGTH: &str = "Content-Length";
+const CONTENT_TYPE: &str = "Content-Type";
+
+// header content types
+const TEXT_PLAIN: &str = "text/plain";
+
 #[allow(dead_code)]
 #[derive(Debug)]
 struct Request {
@@ -28,7 +35,6 @@ impl Response {
         }
     }
 
-    #[allow(dead_code)]
     fn with_header(mut self, key: &str, value: &str) -> Self {
         self.headers.insert(key.to_owned(), value.to_owned());
         self
@@ -48,6 +54,7 @@ enum Method {
     Delete,
 }
 
+#[derive(Debug, PartialEq)]
 enum Status {
     Http200,
     Http400,
@@ -98,7 +105,7 @@ fn parse_to_request(stream: &mut BufReader<&TcpStream>) -> Result<Request> {
     }
 
     let content_length = headers
-        .get("Content-Length")
+        .get(CONTENT_LENGTH)
         .and_then(|s| s.parse::<usize>().ok())
         .unwrap_or(0);
 
@@ -134,16 +141,29 @@ fn root_handler(request: Request) -> Response {
 }
 
 fn echo_handler(request: Request) -> Response {
-    if request.method != Method::Post {
-        return Response::new(Status::Http405);
-    }
-    Response::new(Status::Http200).with_body(request.body.as_str())
+    let body = match request.method {
+        Method::Post => request.body.as_str(),
+        Method::Get => {
+            let parts: Vec<_> = request.path.splitn(3, '/').collect();
+            if parts.len() > 2 {
+                parts[2]
+            } else {
+                ""
+            }
+        }
+        _ => return Response::new(Status::Http405),
+    };
+
+    Response::new(Status::Http200)
+        .with_body(body)
+        .with_header(CONTENT_TYPE, TEXT_PLAIN)
+        .with_header(CONTENT_LENGTH, body.len().to_string().as_str())
 }
 
 fn handle_request(request: Request) -> Response {
     match request.path.as_str() {
         "/" => root_handler(request),
-        "/echo" => echo_handler(request),
+        s if s.starts_with("/echo") => echo_handler(request),
         _ => Response::new(Status::Http404),
     }
 }
