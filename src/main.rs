@@ -1,8 +1,10 @@
 use anyhow::Result;
+use std::cmp::min;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::net::{TcpListener, TcpStream};
 
+#[allow(dead_code)]
 #[derive(Debug)]
 struct Request {
     method: Method,
@@ -26,6 +28,7 @@ impl Response {
         }
     }
 
+    #[allow(dead_code)]
     fn with_header(mut self, key: &str, value: &str) -> Self {
         self.headers.insert(key.to_owned(), value.to_owned());
         self
@@ -104,11 +107,10 @@ fn parse_to_request(stream: &mut BufReader<&TcpStream>) -> Result<Request> {
 
     let body = if content_length > 0 {
         let mut buf = [0u8; 1024];
-        stream.read(&mut buf)?;
+        let n = stream.read(&mut buf)?;
         Some(
-            buf[..content_length]
+            buf[..min(n, content_length)]
                 .iter()
-                .filter(|&&c| c != 0)
                 .map(|&c| c as char)
                 .collect(),
         )
@@ -122,6 +124,13 @@ fn parse_to_request(stream: &mut BufReader<&TcpStream>) -> Result<Request> {
         headers,
         body,
     })
+}
+
+fn handle_request(request: Request) -> Response {
+    match request.path.as_str() {
+        "/" => Response::new(Status::Http200).with_body("Hello World\n"),
+        _ => Response::new(Status::Http404),
+    }
 }
 
 fn write_response(response: Response, stream: &mut BufWriter<&TcpStream>) -> Result<()> {
@@ -143,17 +152,14 @@ fn write_response(response: Response, stream: &mut BufWriter<&TcpStream>) -> Res
     Ok(())
 }
 
-fn handle_request(stream: TcpStream) {
+fn handle_connection(stream: TcpStream) {
     let mut reader = BufReader::new(&stream);
     let request = parse_to_request(&mut reader);
 
     println!("{:?}", request);
 
     let response = match request {
-        Ok(request) => match request.path.as_str() {
-            "/" => Response::new(Status::Http200).with_body("Hello World\n"),
-            _ => Response::new(Status::Http404),
-        },
+        Ok(request) => handle_request(request),
         Err(_) => Response::new(Status::Http400),
     };
     let mut writer = BufWriter::new(&stream);
@@ -169,7 +175,7 @@ fn main() {
         match stream {
             Ok(stream) => {
                 println!("accepted new connection");
-                handle_request(stream);
+                handle_connection(stream);
             }
             Err(e) => {
                 println!("error: {}", e);
