@@ -1,13 +1,14 @@
 use anyhow::Result;
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::net::{TcpListener, TcpStream};
 
+#[derive(Debug)]
 struct Request {
     method: Method,
     path: String,
     headers: HashMap<String, String>,
-    body: String,
+    body: Option<String>,
 }
 
 struct Response {
@@ -36,6 +37,7 @@ impl Response {
     }
 }
 
+#[derive(Debug)]
 enum Method {
     Get,
     Post,
@@ -49,14 +51,15 @@ enum Status {
     Http404,
 }
 
-fn parse_to_request(stream: BufReader<&TcpStream>) -> Result<Request> {
-    let mut lines = stream.lines();
+fn parse_to_request(stream: &mut BufReader<&TcpStream>) -> Result<Request> {
+    let mut line = String::new();
+    stream.read_line(&mut line)?;
 
-    let first = lines.next().ok_or(anyhow::anyhow!("empty request"))??;
+    let line = line.trim_end();
 
-    let parts: Vec<_> = first.split(' ').take(4).collect();
+    let parts: Vec<_> = line.splitn(3, ' ').collect();
     if parts.len() != 3 {
-        return Err(anyhow::anyhow!("invalid request")); // return 405
+        return Err(anyhow::anyhow!("invalid request"));
     }
 
     let method = match parts[0] {
@@ -64,7 +67,7 @@ fn parse_to_request(stream: BufReader<&TcpStream>) -> Result<Request> {
         "POST" => Method::Post,
         "PUT" => Method::Put,
         "DELETE" => Method::Delete,
-        _ => return Err(anyhow::anyhow!("invalid method")),
+        _ => return Err(anyhow::anyhow!("invalid method")), // return 405
     };
 
     let path = parts[1].to_owned();
@@ -74,13 +77,50 @@ fn parse_to_request(stream: BufReader<&TcpStream>) -> Result<Request> {
         _ => return Err(anyhow::anyhow!("invalid version")),
     };
 
-    // TODO: parse headers and body
+    let mut headers = HashMap::new();
+
+    loop {
+        let mut line = String::new();
+        stream.read_line(&mut line)?;
+        let line = line.trim_end();
+        if line.is_empty() {
+            break;
+        }
+        let parts: Vec<_> = line.splitn(2, ": ").collect();
+        if parts.len() != 2 {
+            return Err(anyhow::anyhow!("invalid header"));
+        }
+        headers.insert(parts[0].to_owned(), parts[1].to_owned());
+    }
+
+    let content_length = headers
+        .get("Content-Length")
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(0);
+
+    if content_length > 1024 {
+        return Err(anyhow::anyhow!("content too long"));
+    }
+
+    let body = if content_length > 0 {
+        let mut buf = [0u8; 1024];
+        stream.read(&mut buf)?;
+        Some(
+            buf[..content_length]
+                .iter()
+                .filter(|&&c| c != 0)
+                .map(|&c| c as char)
+                .collect(),
+        )
+    } else {
+        None
+    };
 
     Ok(Request {
-        method: method,
-        path: path,
-        headers: HashMap::new(),
-        body: "".into(),
+        method,
+        path,
+        headers,
+        body,
     })
 }
 
@@ -104,8 +144,10 @@ fn write_response(response: Response, stream: &mut BufWriter<&TcpStream>) -> Res
 }
 
 fn handle_request(stream: TcpStream) {
-    let reader = BufReader::new(&stream);
-    let request = parse_to_request(reader);
+    let mut reader = BufReader::new(&stream);
+    let request = parse_to_request(&mut reader);
+
+    println!("{:?}", request);
 
     let response = match request {
         Ok(request) => match request.path.as_str() {
