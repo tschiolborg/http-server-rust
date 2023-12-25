@@ -8,11 +8,11 @@ use std::net::{TcpListener, TcpStream};
 // header keys
 const CONTENT_LENGTH: &str = "Content-Length";
 const CONTENT_TYPE: &str = "Content-Type";
+const USER_AGENT: &str = "User-Agent";
 
 // header content types
 const TEXT_PLAIN: &str = "text/plain";
 
-#[allow(dead_code)]
 #[derive(Debug)]
 struct Request {
     method: Method,
@@ -64,6 +64,12 @@ impl Response {
     fn with_body(mut self, body: &str) -> Self {
         self.body = body.to_owned();
         self
+    }
+
+    fn with_content_type_and_current_length(self, content_type: &str) -> Self {
+        let body_length = self.body.len().to_string();
+        self.with_header(CONTENT_TYPE, content_type)
+            .with_header(CONTENT_LENGTH, body_length.as_str())
     }
 }
 
@@ -200,13 +206,29 @@ fn echo_handler(request: Request) -> Response {
 
     Response::new(Status::Http200)
         .with_body(body)
-        .with_header(CONTENT_TYPE, TEXT_PLAIN)
-        .with_header(CONTENT_LENGTH, body.len().to_string().as_str())
+        .with_content_type_and_current_length(TEXT_PLAIN)
+}
+
+fn user_agent_handler(request: Request) -> Response {
+    if request.method != Method::Get {
+        return Response::new(Status::Http405);
+    }
+
+    if request.headers.get(USER_AGENT).is_none() {
+        return Response::new(Status::Http400);
+    };
+
+    let body = request.headers.get(USER_AGENT).unwrap();
+
+    Response::new(Status::Http200)
+        .with_body(body.as_str())
+        .with_content_type_and_current_length(TEXT_PLAIN)
 }
 
 fn handle_request(request: Request) -> Response {
     match request.path.as_str() {
         "/" => root_handler(request),
+        "/user-agent" => user_agent_handler(request),
         s if s.starts_with("/echo") => echo_handler(request),
         _ => Response::new(Status::Http404),
     }
