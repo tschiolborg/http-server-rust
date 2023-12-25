@@ -192,7 +192,12 @@ fn root_handler(request: Request) -> Response {
 
 fn echo_handler(request: Request) -> Response {
     let body = match request.method {
-        Method::Post => request.body.as_str(),
+        Method::Post => {
+            if request.path != "/echo" {
+                return Response::new(Status::Http405);
+            }
+            request.body.as_str()
+        }
         Method::Get => {
             let parts: Vec<_> = request.path.splitn(3, '/').collect();
             if parts.len() > 2 {
@@ -277,5 +282,84 @@ fn main() {
                 println!("error: {}", e);
             }
         }
+    }
+}
+
+#[cfg(test)]
+impl Request {
+    fn new(method: Method, path: &str) -> Self {
+        Self {
+            method,
+            path: path.to_owned(),
+            version: "HTTP/1.1".to_owned(),
+            headers: HashMap::new(),
+            body: String::new(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_root() {
+        let req = Request::new(Method::Get, "/");
+        let res = root_handler(req);
+        assert_eq!(res.status, Status::Http200);
+
+        let req = Request::new(Method::Post, "/");
+        let res = root_handler(req);
+        assert_eq!(res.status, Status::Http405);
+    }
+
+    #[test]
+    fn test_echo() {
+        let req = Request::new(Method::Get, "/echo");
+        let res = echo_handler(req);
+        assert_eq!(res.status, Status::Http200);
+        assert_eq!(res.body, "");
+
+        let req = Request::new(Method::Get, "/echo/abc");
+        let res = echo_handler(req);
+        assert_eq!(res.status, Status::Http200);
+        assert_eq!(res.body, "abc");
+
+        let req = Request::new(Method::Post, "/echo");
+        let res = echo_handler(req);
+        assert_eq!(res.status, Status::Http200);
+        assert_eq!(res.body, "");
+
+        let mut req = Request::new(Method::Post, "/echo");
+        req.body = "abc".to_owned(); // todo: add with_body to Request, maybe a trait?
+        let res = echo_handler(req);
+        assert_eq!(res.status, Status::Http200);
+        assert_eq!(res.body, "abc");
+
+        let req = Request::new(Method::Post, "/echo/abc");
+        let res = echo_handler(req);
+        assert_eq!(res.status, Status::Http405);
+
+        let req = Request::new(Method::Put, "/echo");
+        let res = echo_handler(req);
+        assert_eq!(res.status, Status::Http405);
+    }
+
+    #[test]
+    fn test_user_agent() {
+        let req = Request::new(Method::Get, "/user-agent");
+        let res = user_agent_handler(req);
+        assert_eq!(res.status, Status::Http400);
+
+        let mut req = Request::new(Method::Get, "/user-agent");
+        req.headers
+            .insert(USER_AGENT.to_owned(), "curl/7.64.1".to_owned()); // todo: add with_header
+        let res = user_agent_handler(req);
+        assert_eq!(res.status, Status::Http200);
+        assert_eq!(res.body, "curl/7.64.1");
+
+        let req = Request::new(Method::Post, "/user-agent");
+        let res = user_agent_handler(req);
+        assert_eq!(res.status, Status::Http405);
     }
 }
