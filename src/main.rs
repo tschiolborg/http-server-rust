@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::thread;
 
 // header keys
 const CONTENT_LENGTH: &str = "Content-Length";
@@ -187,6 +188,7 @@ fn root_handler(request: Request) -> Response {
     if request.method != Method::Get {
         return Response::new(Status::Http405);
     }
+
     Response::new(Status::Http200).with_body("Hello World")
 }
 
@@ -275,8 +277,7 @@ fn main() {
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
-                println!("accepted new connection");
-                handle_connection(stream);
+                thread::spawn(move || handle_connection(stream));
             }
             Err(e) => {
                 println!("error: {}", e);
@@ -295,6 +296,16 @@ impl Request {
             headers: HashMap::new(),
             body: String::new(),
         }
+    }
+
+    fn with_header(mut self, key: &str, value: &str) -> Self {
+        self.headers.insert(key.to_owned(), value.to_owned());
+        self
+    }
+
+    fn with_body(mut self, body: &str) -> Self {
+        self.body = body.to_owned();
+        self
     }
 }
 
@@ -330,8 +341,7 @@ mod tests {
         assert_eq!(res.status, Status::Http200);
         assert_eq!(res.body, "");
 
-        let mut req = Request::new(Method::Post, "/echo");
-        req.body = "abc".to_owned(); // todo: add with_body to Request, maybe a trait?
+        let req = Request::new(Method::Post, "/echo").with_body("abc");
         let res = echo_handler(req);
         assert_eq!(res.status, Status::Http200);
         assert_eq!(res.body, "abc");
@@ -351,12 +361,11 @@ mod tests {
         let res = user_agent_handler(req);
         assert_eq!(res.status, Status::Http400);
 
-        let mut req = Request::new(Method::Get, "/user-agent");
-        req.headers
-            .insert(USER_AGENT.to_owned(), "curl/7.64.1".to_owned()); // todo: add with_header
+        let header_val = "curl/7.64.1";
+        let req = Request::new(Method::Get, "/user-agent").with_header(USER_AGENT, header_val);
         let res = user_agent_handler(req);
         assert_eq!(res.status, Status::Http200);
-        assert_eq!(res.body, "curl/7.64.1");
+        assert_eq!(res.body, header_val);
 
         let req = Request::new(Method::Post, "/user-agent");
         let res = user_agent_handler(req);
