@@ -1,9 +1,11 @@
 use anyhow::Result;
 use std::cmp::min;
 use std::collections::HashMap;
+use std::env;
 use std::fmt::Display;
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::sync::Arc;
 use std::thread;
 
 // header keys
@@ -110,6 +112,10 @@ impl Status {
             Status::Http405 => "405 Method Not Allowed",
         }
     }
+}
+
+struct State {
+    directory: String,
 }
 
 fn parse_to_request(stream: &mut BufReader<&TcpStream>) -> Result<Request> {
@@ -232,11 +238,25 @@ fn user_agent_handler(request: Request) -> Response {
         .with_content_type_and_current_length(TEXT_PLAIN)
 }
 
-fn handle_request(request: Request) -> Response {
+fn file_handler(state: Arc<State>, request: Request) -> Response {
+    if request.method != Method::Get {
+        return Response::new(Status::Http405);
+    }
+
+    let parts: Vec<_> = request.path.splitn(3, '/').collect();
+    let path = if parts.len() > 2 { parts[2] } else { "" };
+
+    println!("{}", state.directory);
+
+    Response::new(Status::Http200).with_body(path)
+}
+
+fn handle_request(state: Arc<State>, request: Request) -> Response {
     match request.path.as_str() {
         "/" => root_handler(request),
         "/user-agent" => user_agent_handler(request),
-        s if s.starts_with("/echo") => echo_handler(request),
+        s if s == "/echo" || s.starts_with("/echo/") => echo_handler(request),
+        s if s.starts_with("/files/") => file_handler(state, request),
         _ => Response::new(Status::Http404),
     }
 }
@@ -254,14 +274,14 @@ fn write_response(response: Response, stream: &mut BufWriter<&TcpStream>) -> Res
     Ok(())
 }
 
-fn handle_connection(stream: TcpStream) {
+fn handle_connection(state: Arc<State>, stream: TcpStream) {
     let mut reader = BufReader::new(&stream);
     let request = parse_to_request(&mut reader);
 
     let response = match request {
         Ok(request) => {
             println!("{}", request);
-            handle_request(request)
+            handle_request(state, request)
         }
         Err(_) => Response::new(Status::Http400),
     };
@@ -270,6 +290,24 @@ fn handle_connection(stream: TcpStream) {
 }
 
 fn main() {
+    let args: Vec<String> = env::args().skip(1).collect();
+
+    let directory = match args.len() {
+        0 => ".",
+        2 => {
+            if args[0] != "--directory" {
+                return println!("Missing directory flag!");
+            }
+            &args[1]
+        }
+        _ => {
+            return println!("Provide either 0 or 2 arguments!");
+        }
+    };
+    let state = Arc::new(State {
+        directory: directory.to_owned(),
+    });
+
     let listener = TcpListener::bind("127.0.0.1:4221").unwrap();
 
     println!("listening started, ready to accept");
@@ -277,7 +315,8 @@ fn main() {
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
-                thread::spawn(move || handle_connection(stream));
+                let state = Arc::clone(&state);
+                thread::spawn(move || handle_connection(state, stream));
             }
             Err(e) => {
                 println!("error: {}", e);
