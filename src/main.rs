@@ -100,9 +100,11 @@ impl Method {
 #[derive(Debug, PartialEq)]
 enum Status {
     Http200,
+    Http201,
     Http400,
     Http404,
     Http405,
+    Http409,
     Http500,
 }
 
@@ -110,9 +112,11 @@ impl Status {
     fn as_str(&self) -> &str {
         match self {
             Status::Http200 => "200 OK",
+            Status::Http201 => "201 Created",
             Status::Http400 => "400 Bad Request",
             Status::Http404 => "404 Not Found",
             Status::Http405 => "405 Method Not Allowed",
+            Status::Http409 => "409 Conflict",
             Status::Http500 => "500 Internal Server Error",
         }
     }
@@ -260,10 +264,6 @@ fn user_agent_handler(request: Request) -> Response {
 }
 
 fn file_handler(state: Arc<State>, request: Request) -> Response {
-    if !(request.method == Method::Get || request.method == Method::Post) {
-        return Response::new(Status::Http405);
-    }
-
     let path = get_subpath(&request.path);
 
     if path.starts_with("..") {
@@ -275,13 +275,17 @@ fn file_handler(state: Arc<State>, request: Request) -> Response {
 
     let file_path = Path::new(&state.directory).join(path);
     if request.method == Method::Get {
-        get_file_handler(&file_path)
+        get_file(&file_path)
+    } else if request.method == Method::Post {
+        post_file(&file_path, &request.body)
+    } else if request.method == Method::Delete {
+        delete_file(&file_path)
     } else {
-        get_file_handler(&file_path)
+        Response::new(Status::Http405)
     }
 }
 
-fn get_file_handler(path: &PathBuf) -> Response {
+fn get_file(path: &PathBuf) -> Response {
     if !path.exists() {
         return Response::new(Status::Http404);
     }
@@ -294,6 +298,31 @@ fn get_file_handler(path: &PathBuf) -> Response {
                 .with_body(&content)
                 .with_content_type_and_current_length(TEXT_PLAIN)
         }
+        Err(_) => Response::new(Status::Http500),
+    }
+}
+
+fn post_file(path: &PathBuf, body: &String) -> Response {
+    if path.exists() {
+        return Response::new(Status::Http409);
+    }
+    let file = File::create(path);
+    match file {
+        Ok(mut file) => {
+            file.write_all(body.as_bytes()).unwrap();
+            Response::new(Status::Http201)
+        }
+        Err(_) => Response::new(Status::Http500),
+    }
+}
+
+fn delete_file(path: &PathBuf) -> Response {
+    if !path.exists() {
+        return Response::new(Status::Http404);
+    }
+    let result = std::fs::remove_file(path);
+    match result {
+        Ok(_) => Response::new(Status::Http200),
         Err(_) => Response::new(Status::Http500),
     }
 }
@@ -463,12 +492,24 @@ mod tests {
             directory: path.into_os_string().into_string().unwrap(),
         });
 
-        let req = Request::new(Method::Get, "/files/hello.txt");
+        let req = Request::new(Method::Post, "/files/test.txt").with_body("test!");
+        let res = file_handler(state.clone(), req);
+        assert_eq!(res.status, Status::Http201);
+
+        let req = Request::new(Method::Get, "/files/test.txt");
         let res = file_handler(state.clone(), req);
         assert_eq!(res.status, Status::Http200);
-        assert_eq!(res.body, "hello!\n");
+        assert_eq!(res.body, "test!");
 
-        let req = Request::new(Method::Get, "/files/missing.txt");
+        let req = Request::new(Method::Post, "/files/test.txt").with_body("test!");
+        let res = file_handler(state.clone(), req);
+        assert_eq!(res.status, Status::Http409);
+
+        let req = Request::new(Method::Delete, "/files/test.txt");
+        let res = file_handler(state.clone(), req);
+        assert_eq!(res.status, Status::Http200);
+
+        let req = Request::new(Method::Get, "/files/test.txt");
         let res = file_handler(state.clone(), req);
         assert_eq!(res.status, Status::Http404);
 
