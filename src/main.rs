@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
 use std::cmp::min;
 use std::collections::HashMap;
 use std::env;
@@ -169,7 +169,7 @@ fn parse_to_request(stream: &mut BufReader<&TcpStream>) -> Result<Request> {
         return Err(anyhow::anyhow!("content too long"));
     }
 
-    // fix dead lock when no body but content-length is set
+    // FIXME: dead lock when no body but content-length is set
     let body = if content_length > 0 {
         let mut buf = [0u8; 1024];
         let n = stream.read(&mut buf)?;
@@ -246,6 +246,7 @@ fn file_handler(state: Arc<State>, request: Request) -> Response {
     let parts: Vec<_> = request.path.splitn(3, '/').collect();
     let path = if parts.len() > 2 { parts[2] } else { "" };
 
+    println!("{}", path);
     println!("{}", state.directory);
 
     Response::new(Status::Http200).with_body(path)
@@ -289,28 +290,38 @@ fn handle_connection(state: Arc<State>, stream: TcpStream) {
     write_response(response, &mut writer).unwrap();
 }
 
-fn main() {
+fn main() -> Result<()> {
     let args: Vec<String> = env::args().skip(1).collect();
 
     let directory = match args.len() {
-        0 => ".",
+        0 => "lol",
         2 => {
             if args[0] != "--directory" {
-                return println!("Missing directory flag!");
+                bail!("Missing directory flag!");
             }
             &args[1]
         }
         _ => {
-            return println!("Provide either 0 or 2 arguments!");
+            bail!("Provide either 0 or 2 arguments!");
         }
     };
+
+    let path = env::current_dir()?;
+    let path = path.join(directory);
+
+    println!("path: {}", path.display());
+    if !path.exists() {
+        bail!("Directory does not exist!");
+    }
+
     let state = Arc::new(State {
-        directory: directory.to_owned(),
+        directory: path.into_os_string().into_string().unwrap(),
     });
 
     let listener = TcpListener::bind("127.0.0.1:4221").unwrap();
 
-    println!("listening started, ready to accept");
+    println!("listening started, ready to accept on port 4221");
+    println!("directory: {}", state.directory);
 
     for stream in listener.incoming() {
         match stream {
@@ -323,6 +334,7 @@ fn main() {
             }
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]
