@@ -134,7 +134,7 @@ fn parse_to_request(reader: &mut BufReader<&TcpStream>) -> Result<Request> {
 
     let parts: Vec<_> = line.splitn(3, ' ').collect();
     if parts.len() != 3 {
-        return Err(anyhow::anyhow!("invalid request"));
+        bail!("invalid request");
     }
 
     let method = match parts[0] {
@@ -142,14 +142,14 @@ fn parse_to_request(reader: &mut BufReader<&TcpStream>) -> Result<Request> {
         "POST" => Method::Post,
         "PUT" => Method::Put,
         "DELETE" => Method::Delete,
-        _ => return Err(anyhow::anyhow!("invalid method")), // return 405
+        _ => bail!("invalid method"), // return 405
     };
 
     let path = parts[1].to_owned();
 
     let version = match parts[2] {
         s if s == "HTTP/1.1" => s.to_owned(),
-        _ => return Err(anyhow::anyhow!("invalid version")),
+        _ => bail!("invalid version"),
     };
 
     let mut headers = HashMap::new();
@@ -163,7 +163,7 @@ fn parse_to_request(reader: &mut BufReader<&TcpStream>) -> Result<Request> {
         }
         let parts: Vec<_> = line.splitn(2, ": ").collect();
         if parts.len() != 2 {
-            return Err(anyhow::anyhow!("invalid header"));
+            bail!("invalid header");
         }
         headers.insert(parts[0].to_owned(), parts[1].to_owned());
     }
@@ -174,7 +174,7 @@ fn parse_to_request(reader: &mut BufReader<&TcpStream>) -> Result<Request> {
         .unwrap_or(0);
 
     if content_length > 1024 {
-        return Err(anyhow::anyhow!("content too long"));
+        bail!("content too long");
     }
 
     // FIXME: dead lock when no body but content-length is set
