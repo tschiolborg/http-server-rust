@@ -6,7 +6,7 @@ use std::fmt::Display;
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
 
@@ -259,21 +259,8 @@ fn user_agent_handler(request: Request) -> Response {
         .with_content_type_and_current_length(TEXT_PLAIN)
 }
 
-fn read_file(file_path: &Path) -> Result<String> {
-    let file = File::open(file_path)?;
-    let reader = BufReader::new(file);
-
-    let mut content = String::new();
-    for line in reader.lines() {
-        content.push_str(&line?);
-        content.push_str("\n");
-    }
-
-    Ok(content)
-}
-
-fn get_file_handler(state: Arc<State>, request: Request) -> Response {
-    if request.method != Method::Get {
+fn file_handler(state: Arc<State>, request: Request) -> Response {
+    if !(request.method == Method::Get || request.method == Method::Post) {
         return Response::new(Status::Http405);
     }
 
@@ -287,18 +274,28 @@ fn get_file_handler(state: Arc<State>, request: Request) -> Response {
     }
 
     let file_path = Path::new(&state.directory).join(path);
+    if request.method == Method::Get {
+        get_file_handler(&file_path)
+    } else {
+        get_file_handler(&file_path)
+    }
+}
 
-    if !file_path.exists() {
+fn get_file_handler(path: &PathBuf) -> Response {
+    if !path.exists() {
         return Response::new(Status::Http404);
     }
-
-    let Ok(content) = read_file(&file_path) else {
-        return Response::new(Status::Http500);
-    };
-
-    let mut res = Response::new(Status::Http200);
-    res.body = content;
-    res.with_content_type_and_current_length(TEXT_PLAIN)
+    let file = File::open(path);
+    match file {
+        Ok(mut file) => {
+            let mut content = String::new();
+            file.read_to_string(&mut content).unwrap();
+            Response::new(Status::Http200)
+                .with_body(&content)
+                .with_content_type_and_current_length(TEXT_PLAIN)
+        }
+        Err(_) => Response::new(Status::Http500),
+    }
 }
 
 fn handle_request(state: Arc<State>, request: Request) -> Response {
@@ -306,7 +303,7 @@ fn handle_request(state: Arc<State>, request: Request) -> Response {
         "/" => root_handler(request),
         "/user-agent" => user_agent_handler(request),
         s if s == "/echo" || s.starts_with("/echo/") => echo_handler(request),
-        s if s.starts_with("/files/") => get_file_handler(state, request),
+        s if s.starts_with("/files/") => file_handler(state, request),
         _ => Response::new(Status::Http404),
     }
 }
@@ -456,5 +453,31 @@ mod tests {
         let req = Request::new(Method::Post, "/user-agent");
         let res = user_agent_handler(req);
         assert_eq!(res.status, Status::Http405);
+    }
+
+    #[test]
+    fn test_files() {
+        let path = env::current_dir().unwrap().join("lol");
+
+        let state = Arc::new(State {
+            directory: path.into_os_string().into_string().unwrap(),
+        });
+
+        let req = Request::new(Method::Get, "/files/hello.txt");
+        let res = file_handler(state.clone(), req);
+        assert_eq!(res.status, Status::Http200);
+        assert_eq!(res.body, "hello!\n");
+
+        let req = Request::new(Method::Get, "/files/missing.txt");
+        let res = file_handler(state.clone(), req);
+        assert_eq!(res.status, Status::Http404);
+
+        let req = Request::new(Method::Get, "/files/../Cargo.toml");
+        let res = file_handler(state.clone(), req);
+        assert_eq!(res.status, Status::Http400);
+
+        let req = Request::new(Method::Get, "/files/test/hello.txt");
+        let res = file_handler(state.clone(), req);
+        assert_eq!(res.status, Status::Http400);
     }
 }
