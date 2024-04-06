@@ -1,4 +1,4 @@
-# rust-http-server
+# Rust HTTP server from scratch
 
 Simple HTTP server in Rust from scratch.
 
