@@ -3,8 +3,10 @@ use std::cmp::min;
 use std::collections::HashMap;
 use std::env;
 use std::fmt::Display;
+use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::path::Path;
 use std::sync::Arc;
 use std::thread;
 
@@ -101,6 +103,7 @@ enum Status {
     Http400,
     Http404,
     Http405,
+    Http500,
 }
 
 impl Status {
@@ -110,6 +113,7 @@ impl Status {
             Status::Http400 => "400 Bad Request",
             Status::Http404 => "404 Not Found",
             Status::Http405 => "405 Method Not Allowed",
+            Status::Http500 => "500 Internal Server Error",
         }
     }
 }
@@ -195,7 +199,9 @@ fn root_handler(request: Request) -> Response {
         return Response::new(Status::Http405);
     }
 
-    Response::new(Status::Http200).with_body("Hello World")
+    Response::new(Status::Http200)
+        .with_body("Hello World")
+        .with_content_type_and_current_length(TEXT_PLAIN)
 }
 
 fn echo_handler(request: Request) -> Response {
@@ -238,6 +244,19 @@ fn user_agent_handler(request: Request) -> Response {
         .with_content_type_and_current_length(TEXT_PLAIN)
 }
 
+fn read_file(file_path: &Path) -> Result<String> {
+    let file = File::open(file_path)?;
+    let reader = BufReader::new(file);
+
+    let mut content = String::new();
+    for line in reader.lines() {
+        content.push_str(&line?);
+        content.push_str("\n");
+    }
+
+    Ok(content)
+}
+
 fn file_handler(state: Arc<State>, request: Request) -> Response {
     if request.method != Method::Get {
         return Response::new(Status::Http405);
@@ -246,10 +265,26 @@ fn file_handler(state: Arc<State>, request: Request) -> Response {
     let parts: Vec<_> = request.path.splitn(3, '/').collect();
     let path = if parts.len() > 2 { parts[2] } else { "" };
 
-    println!("{}", path);
-    println!("{}", state.directory);
+    if path.starts_with("..") {
+        return Response::new(Status::Http400);
+    }
+    if path.contains("/") {
+        return Response::new(Status::Http400);
+    }
 
-    Response::new(Status::Http200).with_body(path)
+    let file_path = Path::new(&state.directory).join(path);
+
+    if !file_path.exists() {
+        return Response::new(Status::Http404);
+    }
+
+    let Ok(content) = read_file(&file_path) else {
+        return Response::new(Status::Http500);
+    };
+
+    let mut res = Response::new(Status::Http200);
+    res.body = content;
+    res.with_content_type_and_current_length(TEXT_PLAIN)
 }
 
 fn handle_request(state: Arc<State>, request: Request) -> Response {
@@ -309,7 +344,6 @@ fn main() -> Result<()> {
     let path = env::current_dir()?;
     let path = path.join(directory);
 
-    println!("path: {}", path.display());
     if !path.exists() {
         bail!("Directory does not exist!");
     }
