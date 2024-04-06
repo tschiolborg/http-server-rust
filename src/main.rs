@@ -122,9 +122,9 @@ struct State {
     directory: String,
 }
 
-fn parse_to_request(stream: &mut BufReader<&TcpStream>) -> Result<Request> {
+fn parse_to_request(reader: &mut BufReader<&TcpStream>) -> Result<Request> {
     let mut line = String::new();
-    stream.read_line(&mut line)?;
+    reader.read_line(&mut line)?;
 
     let line = line.trim_end();
 
@@ -152,7 +152,7 @@ fn parse_to_request(stream: &mut BufReader<&TcpStream>) -> Result<Request> {
 
     loop {
         let mut line = String::new();
-        stream.read_line(&mut line)?;
+        reader.read_line(&mut line)?;
         let line = line.trim_end();
         if line.is_empty() {
             break;
@@ -176,7 +176,7 @@ fn parse_to_request(stream: &mut BufReader<&TcpStream>) -> Result<Request> {
     // FIXME: dead lock when no body but content-length is set
     let body = if content_length > 0 {
         let mut buf = [0u8; 1024];
-        let n = stream.read(&mut buf)?;
+        let n = reader.read(&mut buf)?;
         buf[..min(n, content_length)]
             .iter()
             .map(|&c| c as char)
@@ -192,6 +192,28 @@ fn parse_to_request(stream: &mut BufReader<&TcpStream>) -> Result<Request> {
         headers,
         body,
     })
+}
+
+fn write_response(response: Response, stream: &mut BufWriter<&TcpStream>) -> Result<()> {
+    stream.write_all(format!("HTTP/1.1 {}\r\n", response.status.as_str()).as_bytes())?;
+
+    for (key, value) in response.headers {
+        stream.write_all(format!("{}: {}\r\n", key, value).as_bytes())?;
+    }
+
+    stream.write_all(b"\r\n")?;
+    stream.write_all(response.body.as_bytes())?;
+
+    Ok(())
+}
+
+fn get_subpath(path: &str) -> &str {
+    let parts: Vec<_> = path.splitn(3, '/').collect();
+    if parts.len() > 2 {
+        parts[2]
+    } else {
+        ""
+    }
 }
 
 fn root_handler(request: Request) -> Response {
@@ -212,14 +234,7 @@ fn echo_handler(request: Request) -> Response {
             }
             request.body.as_str()
         }
-        Method::Get => {
-            let parts: Vec<_> = request.path.splitn(3, '/').collect();
-            if parts.len() > 2 {
-                parts[2]
-            } else {
-                ""
-            }
-        }
+        Method::Get => get_subpath(&request.path),
         _ => return Response::new(Status::Http405),
     };
 
@@ -257,13 +272,12 @@ fn read_file(file_path: &Path) -> Result<String> {
     Ok(content)
 }
 
-fn file_handler(state: Arc<State>, request: Request) -> Response {
+fn get_file_handler(state: Arc<State>, request: Request) -> Response {
     if request.method != Method::Get {
         return Response::new(Status::Http405);
     }
 
-    let parts: Vec<_> = request.path.splitn(3, '/').collect();
-    let path = if parts.len() > 2 { parts[2] } else { "" };
+    let path = get_subpath(&request.path);
 
     if path.starts_with("..") {
         return Response::new(Status::Http400);
@@ -292,22 +306,9 @@ fn handle_request(state: Arc<State>, request: Request) -> Response {
         "/" => root_handler(request),
         "/user-agent" => user_agent_handler(request),
         s if s == "/echo" || s.starts_with("/echo/") => echo_handler(request),
-        s if s.starts_with("/files/") => file_handler(state, request),
+        s if s.starts_with("/files/") => get_file_handler(state, request),
         _ => Response::new(Status::Http404),
     }
-}
-
-fn write_response(response: Response, stream: &mut BufWriter<&TcpStream>) -> Result<()> {
-    stream.write_all(format!("HTTP/1.1 {}\r\n", response.status.as_str()).as_bytes())?;
-
-    for (key, value) in response.headers {
-        stream.write_all(format!("{}: {}\r\n", key, value).as_bytes())?;
-    }
-
-    stream.write_all(b"\r\n")?;
-    stream.write_all(response.body.as_bytes())?;
-
-    Ok(())
 }
 
 fn handle_connection(state: Arc<State>, stream: TcpStream) {
